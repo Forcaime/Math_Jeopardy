@@ -2,7 +2,7 @@
 // GLOBAL STATE
 // ========================================
 const state = {
-    adminPassword: 'admin123',
+    adminPassword: 'pradita898',
     sessionId: 'olympiad-session-' + Date.now(), // Unique session ID
     questionPool: {
         easy: [],
