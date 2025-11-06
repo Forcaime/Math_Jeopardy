@@ -2,14 +2,34 @@
 // GLOBAL STATE
 // ========================================
 const state = {
-    adminPassword: 'pradita898',
-    sessionId: 'olympiad-session-' + Date.now(), // Unique session ID
+    adminPassword: 'pradita789',
     questionPool: {
-        easy: [],
-        medium: [],
-        hard: []
+        easy: [
+            { id: "A1", src: "questions/A1.png", alt: "A1" },
+            { id: "B1", src: "questions/B1.png", alt: "B1" },
+            { id: "C1", src: "questions/C1.png", alt: "C1" },
+            { id: "D1", src: "questions/D1.png", alt: "D1" },
+            { id: "E1", src: "questions/E1.png", alt: "E1" },
+            { id: "F1", src: "questions/F1.png", alt: "F1" }
+        ],
+        medium: [
+            { id: "A2", src: "questions/A2.png", alt: "A2" },
+            { id: "B2", src: "questions/B2.png", alt: "B2" },
+            { id: "C2", src: "questions/C2.png", alt: "C2" },
+            { id: "D2", src: "questions/D2.png", alt: "D2" },
+            { id: "E2", src: "questions/E2.png", alt: "E2" },
+            { id: "F2", src: "questions/F2.png", alt: "F2" }
+        ],
+        hard: [
+            { id: "A3", src: "questions/A3.png", alt: "A3" },
+            { id: "B3", src: "questions/B3.png", alt: "B3" },
+            { id: "C3", src: "questions/C3.png", alt: "C3" },
+            { id: "D3", src: "questions/D3.png", alt: "D3" },
+            { id: "E3", src: "questions/E3.png", alt: "E3" },
+            { id: "F3", src: "questions/F3.png", alt: "F3" }
+        ],
     },
-    usedQuestions: {},
+    usedQuestions: {}, // Track soal yang sudah digunakan per peserta
     participants: [],
     currentSet: 1,
     phase: 'setup',
@@ -21,88 +41,8 @@ const state = {
     currentQuestion: null,
     isCompetitionActive: false,
     timerInterval: null,
-    isAdmin: false
+    competitionToken: null // New state for token
 };
-
-// Firebase references
-const dbRef = {
-    participants: null,
-    competition: null,
-    questions: null
-};
-
-// ========================================
-// FIREBASE INITIALIZATION
-// ========================================
-function initFirebase() {
-    // Create unique session or use existing
-    const urlParams = new URLSearchParams(window.location.search);
-    const sessionParam = urlParams.get('session');
-    
-    if (sessionParam) {
-        state.sessionId = sessionParam;
-    }
-    
-    // Set up Firebase references
-    dbRef.participants = database.ref(`sessions/${state.sessionId}/participants`);
-    dbRef.competition = database.ref(`sessions/${state.sessionId}/competition`);
-    dbRef.questions = database.ref(`sessions/${state.sessionId}/questions`);
-    
-    // Listen for changes
-    setupFirebaseListeners();
-}
-
-function setupFirebaseListeners() {
-    // Listen to participants
-    dbRef.participants.on('value', (snapshot) => {
-        const data = snapshot.val();
-        if (data) {
-            state.participants = Object.keys(data).map(key => ({
-                id: key,
-                ...data[key]
-            }));
-            updateParticipantList();
-        }
-    });
-    
-    // Listen to competition status
-    dbRef.competition.on('value', (snapshot) => {
-        const data = snapshot.val();
-        if (data && !state.isAdmin) {
-            // Update competition state for participants
-            if (data.isActive && !state.isCompetitionActive) {
-                state.isCompetitionActive = true;
-                state.currentSet = data.currentSet || 1;
-                state.phase = data.phase || 'selection';
-                state.timeLeft = data.timeLeft || 30;
-                
-                if (state.participantId) {
-                    showCompetitionScreen();
-                }
-            }
-            
-            if (data.isActive) {
-                state.currentSet = data.currentSet || 1;
-                state.phase = data.phase || 'selection';
-                state.timeLeft = data.timeLeft || 30;
-                updateTimerDisplay();
-                
-                // Sync phase
-                if (data.phase === 'selection' && document.getElementById('workingPhase').classList.contains('hidden') === false) {
-                    showSelectionPhase();
-                }
-            }
-        }
-    });
-    
-    // Listen to questions
-    dbRef.questions.on('value', (snapshot) => {
-        const data = snapshot.val();
-        if (data) {
-            state.questionPool = data;
-        }
-    });
-}
 
 // ========================================
 // UTILITY FUNCTIONS
@@ -128,6 +68,15 @@ function formatTime(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+function generateToken() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let token = '';
+    for (let i = 0; i < 6; i++) {
+        token += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return token;
+}
+
 // ========================================
 // VIEW SWITCHING
 // ========================================
@@ -142,19 +91,12 @@ function showAdminLogin() {
 }
 
 function switchToAdmin() {
-    state.isAdmin = true;
     document.getElementById('adminLogin').classList.add('hidden');
     document.getElementById('participantView').classList.add('hidden');
     document.getElementById('adminView').classList.remove('hidden');
-    
-    // Show session link
-    const sessionUrl = `${window.location.origin}${window.location.pathname}?session=${state.sessionId}`;
-    console.log('Session URL:', sessionUrl);
-    alert(`Link untuk peserta:\n${sessionUrl}\n\nBagikan link ini ke semua peserta!`);
 }
 
 function switchToParticipant() {
-    state.isAdmin = false;
     document.getElementById('adminLogin').classList.add('hidden');
     document.getElementById('adminView').classList.add('hidden');
     document.getElementById('participantView').classList.remove('hidden');
@@ -178,7 +120,7 @@ function loginAdmin() {
 }
 
 function logoutAdmin() {
-    state.isAdmin = false;
+    state.competitionToken = null; // Clear token on logout
     showAdminLogin();
 }
 
@@ -215,10 +157,9 @@ function initQuestionInput() {
     });
     
     area.innerHTML = html;
-    loadQuestionsFromFirebase();
 }
 
-async function handleImageUpload(event, difficulty) {
+function handleImageUpload(event, difficulty) {
     const files = event.target.files;
     const currentCount = state.questionPool[difficulty].length;
     
@@ -239,57 +180,30 @@ async function handleImageUpload(event, difficulty) {
             continue;
         }
         
-        // Upload to Firebase Storage
-        const storageRef = storage.ref(`${state.sessionId}/questions/${difficulty}/${Date.now()}_${file.name}`);
-        
-        try {
-            const snapshot = await storageRef.put(file);
-            const downloadURL = await snapshot.ref.getDownloadURL();
-            
-            const questionData = {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const imageData = e.target.result;
+            state.questionPool[difficulty].push({
                 id: Date.now() + Math.random(),
-                url: downloadURL,
+                data: imageData,
                 filename: file.name
-            };
-            
-            state.questionPool[difficulty].push(questionData);
-            
-            // Save to Firebase Database
-            await dbRef.questions.child(difficulty).set(state.questionPool[difficulty]);
-            
+            });
             updateQuestionPreview(difficulty);
-        } catch (error) {
-            console.error('Upload error:', error);
-            alert('Gagal upload gambar: ' + error.message);
-        }
+        };
+        reader.readAsDataURL(file);
     }
     
     event.target.value = '';
 }
 
-function loadQuestionsFromFirebase() {
-    dbRef.questions.once('value', (snapshot) => {
-        const data = snapshot.val();
-        if (data) {
-            state.questionPool = data;
-            ['easy', 'medium', 'hard'].forEach(diff => {
-                updateQuestionPreview(diff);
-            });
-        }
-    });
-}
-
 function updateQuestionPreview(difficulty) {
-    const count = state.questionPool[difficulty]?.length || 0;
+    const count = state.questionPool[difficulty].length;
     document.getElementById(`count-${difficulty}`).textContent = count;
     
     const previewArea = document.getElementById(`preview-${difficulty}`);
-    if (!previewArea) return;
-    
-    const questions = state.questionPool[difficulty] || [];
-    previewArea.innerHTML = questions.map((q, index) => `
+    previewArea.innerHTML = state.questionPool[difficulty].map((q, index) => `
         <div class="relative">
-            <img src="${q.url}" class="w-full h-24 object-cover rounded border-2 border-gray-300">
+            <img src="${q.data}" class="w-full h-24 object-cover rounded border-2 border-gray-300">
             <button onclick="removeQuestion('${difficulty}', ${index})" 
                     class="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600">
                 ×
@@ -299,9 +213,8 @@ function updateQuestionPreview(difficulty) {
     `).join('');
 }
 
-async function removeQuestion(difficulty, index) {
+function removeQuestion(difficulty, index) {
     state.questionPool[difficulty].splice(index, 1);
-    await dbRef.questions.child(difficulty).set(state.questionPool[difficulty]);
     updateQuestionPreview(difficulty);
 }
 
@@ -323,7 +236,7 @@ function updateParticipantList() {
     }
 }
 
-async function registerParticipant() {
+function registerParticipant() {
     const nameInput = document.getElementById('participantName');
     const name = nameInput.value.trim();
     
@@ -337,67 +250,83 @@ async function registerParticipant() {
         return;
     }
     
-    const id = 'participant_' + Date.now();
+    const id = Date.now() + Math.random();
     state.participantId = id;
     state.participantName = name;
-    
-    // Save to Firebase
-    await dbRef.participants.child(id).set({
-        name: name,
-        joinedAt: Date.now(),
-        answers: {}
-    });
+    state.participants.push({ id, name, answers: {} });
     
     nameInput.value = '';
+    updateParticipantList();
     
     document.getElementById('registrationForm').classList.add('hidden');
     document.getElementById('waitingScreen').classList.remove('hidden');
     document.getElementById('registeredName').textContent = name;
 }
 
+function startCompetitionByToken() {
+    const tokenInput = document.getElementById('competitionToken');
+    const tokenError = document.getElementById('tokenError');
+    const token = tokenInput.value.trim().toUpperCase();
+
+    tokenError.classList.add('hidden');
+    
+    if (!state.isCompetitionActive || state.competitionToken !== token) {
+        tokenError.classList.remove('hidden');
+        tokenInput.value = '';
+        tokenInput.focus();
+        return;
+    }
+
+    // Token is correct and competition is active, start for participant
+    showCompetitionScreen();
+}
+
 // ========================================
 // COMPETITION MANAGEMENT
 // ========================================
-async function startCompetition() {
+function startCompetition() {
     if (state.participants.length === 0) {
         alert('Tambahkan peserta terlebih dahulu!');
         return;
     }
     
     // Check if all difficulties have 6 questions
-    if (!state.questionPool.easy || state.questionPool.easy.length < 6) {
+    if (state.questionPool.easy.length < 6) {
         alert('Upload 6 soal Mudah terlebih dahulu!');
         return;
     }
-    if (!state.questionPool.medium || state.questionPool.medium.length < 6) {
+    if (state.questionPool.medium.length < 6) {
         alert('Upload 6 soal Sedang terlebih dahulu!');
         return;
     }
-    if (!state.questionPool.hard || state.questionPool.hard.length < 6) {
+    if (state.questionPool.hard.length < 6) {
         alert('Upload 6 soal Sulit terlebih dahulu!');
         return;
     }
     
+    // Initialize used questions tracking for each participant
+    state.participants.forEach(p => {
+        state.usedQuestions[p.id] = { easy: [], medium: [], hard: [] };
+    });
+    
     state.isCompetitionActive = true;
+    state.competitionToken = generateToken(); // Generate token
     state.phase = 'selection';
     state.currentSet = 1;
     state.timeLeft = 30;
-    
-    // Save to Firebase
-    await dbRef.competition.set({
-        isActive: true,
-        phase: 'selection',
-        currentSet: 1,
-        timeLeft: 30,
-        startedAt: Date.now()
-    });
     
     document.getElementById('startBtn').disabled = true;
     document.getElementById('startBtn').textContent = 'Kompetisi Sedang Berjalan';
     document.getElementById('competitionStatus').classList.remove('hidden');
     document.getElementById('currentSetAdmin').textContent = state.currentSet;
+    document.getElementById('competitionTokenAdmin').textContent = state.competitionToken; // Display token
     
-    startTimer();
+    // Do not auto-start for participant from admin view, they need the token
+    // if (state.participantId) {
+    //     showCompetitionScreen();
+    // }
+    
+    // startTimer(); // Timer starts in showSelectionPhase
 }
 
 function startTimer() {
@@ -405,16 +334,16 @@ function startTimer() {
         clearInterval(state.timerInterval);
     }
     
-    if (!state.isAdmin) return; // Only admin controls timer
-    
-    state.timerInterval = setInterval(async () => {
+    updateTimerDisplay(); // Initial display
+    state.timerInterval = setInterval(() => {
         state.timeLeft--;
-        
-        // Update Firebase
-        await dbRef.competition.update({ timeLeft: state.timeLeft });
-        
-        if (state.timeLeft <= 0) {
-            await handleTimeUp();
+        if (state.timeLeft < 0) {
+            state.timeLeft = 0; // Prevent negative time
+        }
+        updateTimerDisplay();
+        if (state.timeLeft === 0) {
+            clearInterval(state.timerInterval); // Stop the timer
+            handleTimeUp();
         }
     }, 1000);
 }
@@ -426,70 +355,42 @@ function updateTimerDisplay() {
     }
 }
 
-async function handleTimeUp() {
+function handleTimeUp() {
     if (state.phase === 'selection') {
-        state.phase = 'working';
-        state.timeLeft = 600;
-        
-        await dbRef.competition.update({
-            phase: 'working',
-            timeLeft: 600
-        });
-        
-        // Participants will handle their own working phase
-    } else if (state.phase === 'working') {
-        if (state.currentSet < 6) {
-            state.currentSet++;
-            state.phase = 'selection';
-            state.timeLeft = 30;
-            
-            await dbRef.competition.update({
-                phase: 'selection',
-                currentSet: state.currentSet,
-                timeLeft: 30
-            });
-            
-            document.getElementById('currentSetAdmin').textContent = state.currentSet;
-        } else {
-            await finishCompetition();
+        if (!state.selectedDifficulty) {
+            state.selectedDifficulty = 'easy';
         }
+        startWorkingPhase();
+    } else if (state.phase === 'working') {
+        finishWorkingPhase();
     }
 }
 
 // ========================================
-// COMPETITION PHASES (PARTICIPANT)
+// COMPETITION PHASES
 // ========================================
 function showCompetitionScreen() {
     document.getElementById('waitingScreen').classList.add('hidden');
     document.getElementById('competitionScreen').classList.remove('hidden');
-    
-    // Listen for phase changes
-    dbRef.competition.on('value', (snapshot) => {
-        const data = snapshot.val();
-        if (data && data.isActive) {
-            state.currentSet = data.currentSet;
-            state.phase = data.phase;
-            state.timeLeft = data.timeLeft;
-            
-            if (data.phase === 'selection') {
-                showSelectionPhase();
-            } else if (data.phase === 'working' && state.selectedDifficulty) {
-                startWorkingPhase();
-            }
-        }
-    });
+    showSelectionPhase();
 }
 
 function showSelectionPhase() {
+    state.phase = 'selection';
+    state.timeLeft = 30;
+    state.selectedDifficulty = null;
+    
     document.getElementById('selectionPhase').classList.remove('hidden');
     document.getElementById('workingPhase').classList.add('hidden');
     document.getElementById('currentSetNum').textContent = state.currentSet;
     
+    // Show available question counts (6 for all since we always have 6 questions)
     document.getElementById('easyCount').textContent = '6';
     document.getElementById('mediumCount').textContent = '6';
     document.getElementById('hardCount').textContent = '6';
     
     resetDifficultyButtons();
+    startTimer();
 }
 
 function selectDifficulty(difficulty) {
@@ -499,10 +400,7 @@ function selectDifficulty(difficulty) {
 
 function resetDifficultyButtons() {
     ['btnEasy', 'btnMedium', 'btnHard'].forEach(id => {
-        const btn = document.getElementById(id);
-        if (btn) {
-            btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
-        }
+        document.getElementById(id).className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
     });
 }
 
@@ -511,47 +409,44 @@ function updateDifficultyButtons(selected) {
     
     Object.entries(buttons).forEach(([diff, id]) => {
         const btn = document.getElementById(id);
-        if (btn) {
-            if (diff === selected) {
-                btn.className = 'p-6 rounded-lg border-4 border-green-500 bg-green-50 scale-105 transition-all';
-            } else {
-                btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
-            }
+        if (diff === selected) {
+            btn.className = 'p-6 rounded-lg border-4 border-green-500 bg-green-50 scale-105 transition-all';
+        } else {
+            btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
         }
     });
 }
 
-async function startWorkingPhase() {
-    if (!state.selectedDifficulty) {
-        state.selectedDifficulty = 'easy';
-    }
-    
+function startWorkingPhase() {
     const difficulty = state.selectedDifficulty;
-    
-    // Get question pool from Firebase
-    const snapshot = await dbRef.questions.child(difficulty).once('value');
-    const questionPool = snapshot.val() || [];
-    
-    if (questionPool.length === 0) {
-        alert('Tidak ada soal tersedia!');
-        return;
-    }
-    
-    // Initialize used questions tracking
-    if (!state.usedQuestions[state.participantId]) {
-        state.usedQuestions[state.participantId] = { easy: [], medium: [], hard: [] };
-    }
-    
+    const questionPool = state.questionPool[difficulty];
     const usedQuestions = state.usedQuestions[state.participantId][difficulty];
+    
+    // Get available questions (not used by this participant yet)
     const availableQuestions = questionPool.filter(q => !usedQuestions.includes(q.id));
     
     if (availableQuestions.length === 0) {
-        alert('Semua soal sudah dikerjakan!');
-        return;
+        alert('Tidak ada soal tersedia lagi untuk kesulitan ini!');
+        // Auto select another difficulty
+        if (state.questionPool.easy.length > 0 && state.usedQuestions[state.participantId].easy.length < 6) {
+            state.selectedDifficulty = 'easy';
+        } else if (state.questionPool.medium.length > 0 && state.usedQuestions[state.participantId].medium.length < 6) {
+            state.selectedDifficulty = 'medium';
+        } else if (state.questionPool.hard.length > 0 && state.usedQuestions[state.participantId].hard.length < 6) {
+            state.selectedDifficulty = 'hard';
+        } else {
+            finishWorkingPhase();
+            return;
+        }
+        return startWorkingPhase();
     }
     
     // Random select
-    const shuffled = shuffleArray(availableQuestions, state.participantId + state.currentSet);
+    // Note: The original code had a bug here, assuming a hashCode method on a number.
+    // I'm keeping the original logic structure but removing the non-standard hashCode call.
+    // Since participantId is a number (Date.now() + Math.random()), I'll use a simpler seed.
+    const seed = Math.floor(state.participantId) + state.currentSet;
+    const shuffled = shuffleArray(availableQuestions, seed);
     const selectedQuestion = shuffled[0];
     
     // Mark as used
@@ -565,20 +460,41 @@ async function startWorkingPhase() {
     document.getElementById('selectedDifficultyLabel').textContent = diffLabels[difficulty];
     
     const questionText = document.getElementById('questionText');
-    questionText.innerHTML = `<img src="${selectedQuestion.url}" class="max-w-full h-auto rounded-lg border-2 border-gray-300" alt="Soal">`;
+    // FIX: Use selectedQuestion.src instead of selectedQuestion.url
+    questionText.innerHTML = `<img src="${selectedQuestion.src}" class="max-w-full h-auto rounded-lg border-2 border-gray-300" alt="Soal ${selectedQuestion.id}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22><rect fill=%22%23ddd%22 width=%22400%22 height=%22300%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22>${selectedQuestion.id}</text></svg>'">`;
     
     const savedAnswer = state.answers[`set${state.currentSet}`] || '';
     document.getElementById('answerInput').value = savedAnswer;
+    
+    startTimer();
 }
 
-async function finishCompetition() {
+function finishWorkingPhase() {
+    const answer = document.getElementById('answerInput').value;
+    state.answers[`set${state.currentSet}`] = answer;
+    
+    const participantIndex = state.participants.findIndex(p => p.id === state.participantId);
+    if (participantIndex !== -1) {
+        state.participants[participantIndex].answers[`set${state.currentSet}`] = {
+            difficulty: state.selectedDifficulty,
+            question: state.currentQuestion,
+            answer: answer
+        };
+    }
+    
+    if (state.currentSet < 6) {
+        state.currentSet++;
+        document.getElementById('currentSetAdmin').textContent = state.currentSet;
+        showSelectionPhase();
+    } else {
+        finishCompetition();
+    }
+}
+
+function finishCompetition() {
     state.phase = 'finished';
     clearInterval(state.timerInterval);
-    
-    await dbRef.competition.update({
-        isActive: false,
-        phase: 'finished'
-    });
+    state.competitionToken = null; // Clear token on competition end
     
     document.getElementById('competitionScreen').classList.add('hidden');
     document.getElementById('finishedScreen').classList.remove('hidden');
@@ -588,48 +504,53 @@ async function finishCompetition() {
 // KEYBOARD SHORTCUT
 // ========================================
 function setupKeyboardShortcut() {
+    // Option+Shift+G (Mac) or Alt+Shift+G (Windows/Linux)
     document.addEventListener('keydown', (e) => {
+        // Check for Option/Alt + Shift + G
         if ((e.altKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
             e.preventDefault();
             showAdminLogin();
         }
     });
     
+    // Enter key on password input
     document.getElementById('adminPassword').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             loginAdmin();
         }
     });
     
+    // Enter key on participant name
     document.getElementById('participantName').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             registerParticipant();
         }
     });
+
+    // Enter key on token input
+    const tokenInput = document.getElementById('competitionToken');
+    if (tokenInput) {
+        tokenInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                startCompetitionByToken();
+            }
+        });
+    }
 }
 
 // ========================================
 // INITIALIZATION
 // ========================================
 document.addEventListener('DOMContentLoaded', () => {
-    initFirebase();
     initQuestionInput();
     switchToParticipant();
+    updateParticipantList();
     setupKeyboardShortcut();
     
     const answerInput = document.getElementById('answerInput');
     if (answerInput) {
-        answerInput.addEventListener('input', async (e) => {
+        answerInput.addEventListener('input', (e) => {
             state.answers[`set${state.currentSet}`] = e.target.value;
-            
-            // Save answer to Firebase
-            if (state.participantId) {
-                await dbRef.participants.child(state.participantId).child('answers').child(`set${state.currentSet}`).set({
-                    difficulty: state.selectedDifficulty,
-                    answer: e.target.value,
-                    timestamp: Date.now()
-                });
-            }
         });
     }
 });
