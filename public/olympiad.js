@@ -2,21 +2,14 @@
 // GLOBAL STATE
 // ========================================
 const state = {
-    adminPassword: 'pradita178',
-    questions: {
-        set1: { easy: [], medium: [], hard: [] },
-        set2: { easy: [], medium: [], hard: [] },
-        set3: { easy: [], medium: [], hard: [] },
-        set4: { easy: [], medium: [], hard: [] },
-        set5: { easy: [], medium: [], hard: [] },
-        set6: { easy: [], medium: [], hard: [] }
-    },
+    adminPassword: 'admin123',
+    sessionId: 'olympiad-session-' + Date.now(), // Unique session ID
     questionPool: {
-        easy: [],    // Pool 6 soal mudah
-        medium: [],  // Pool 6 soal sedang
-        hard: []     // Pool 6 soal sulit
+        easy: [],
+        medium: [],
+        hard: []
     },
-    usedQuestions: {}, // Track soal yang sudah digunakan per peserta
+    usedQuestions: {},
     participants: [],
     currentSet: 1,
     phase: 'setup',
@@ -27,8 +20,89 @@ const state = {
     answers: {},
     currentQuestion: null,
     isCompetitionActive: false,
-    timerInterval: null
+    timerInterval: null,
+    isAdmin: false
 };
+
+// Firebase references
+const dbRef = {
+    participants: null,
+    competition: null,
+    questions: null
+};
+
+// ========================================
+// FIREBASE INITIALIZATION
+// ========================================
+function initFirebase() {
+    // Create unique session or use existing
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionParam = urlParams.get('session');
+    
+    if (sessionParam) {
+        state.sessionId = sessionParam;
+    }
+    
+    // Set up Firebase references
+    dbRef.participants = database.ref(`sessions/${state.sessionId}/participants`);
+    dbRef.competition = database.ref(`sessions/${state.sessionId}/competition`);
+    dbRef.questions = database.ref(`sessions/${state.sessionId}/questions`);
+    
+    // Listen for changes
+    setupFirebaseListeners();
+}
+
+function setupFirebaseListeners() {
+    // Listen to participants
+    dbRef.participants.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            state.participants = Object.keys(data).map(key => ({
+                id: key,
+                ...data[key]
+            }));
+            updateParticipantList();
+        }
+    });
+    
+    // Listen to competition status
+    dbRef.competition.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data && !state.isAdmin) {
+            // Update competition state for participants
+            if (data.isActive && !state.isCompetitionActive) {
+                state.isCompetitionActive = true;
+                state.currentSet = data.currentSet || 1;
+                state.phase = data.phase || 'selection';
+                state.timeLeft = data.timeLeft || 30;
+                
+                if (state.participantId) {
+                    showCompetitionScreen();
+                }
+            }
+            
+            if (data.isActive) {
+                state.currentSet = data.currentSet || 1;
+                state.phase = data.phase || 'selection';
+                state.timeLeft = data.timeLeft || 30;
+                updateTimerDisplay();
+                
+                // Sync phase
+                if (data.phase === 'selection' && document.getElementById('workingPhase').classList.contains('hidden') === false) {
+                    showSelectionPhase();
+                }
+            }
+        }
+    });
+    
+    // Listen to questions
+    dbRef.questions.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            state.questionPool = data;
+        }
+    });
+}
 
 // ========================================
 // UTILITY FUNCTIONS
@@ -68,12 +142,19 @@ function showAdminLogin() {
 }
 
 function switchToAdmin() {
+    state.isAdmin = true;
     document.getElementById('adminLogin').classList.add('hidden');
     document.getElementById('participantView').classList.add('hidden');
     document.getElementById('adminView').classList.remove('hidden');
+    
+    // Show session link
+    const sessionUrl = `${window.location.origin}${window.location.pathname}?session=${state.sessionId}`;
+    console.log('Session URL:', sessionUrl);
+    alert(`Link untuk peserta:\n${sessionUrl}\n\nBagikan link ini ke semua peserta!`);
 }
 
 function switchToParticipant() {
+    state.isAdmin = false;
     document.getElementById('adminLogin').classList.add('hidden');
     document.getElementById('adminView').classList.add('hidden');
     document.getElementById('participantView').classList.remove('hidden');
@@ -97,6 +178,7 @@ function loginAdmin() {
 }
 
 function logoutAdmin() {
+    state.isAdmin = false;
     showAdminLogin();
 }
 
@@ -133,9 +215,10 @@ function initQuestionInput() {
     });
     
     area.innerHTML = html;
+    loadQuestionsFromFirebase();
 }
 
-function handleImageUpload(event, difficulty) {
+async function handleImageUpload(event, difficulty) {
     const files = event.target.files;
     const currentCount = state.questionPool[difficulty].length;
     
@@ -156,30 +239,57 @@ function handleImageUpload(event, difficulty) {
             continue;
         }
         
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const imageData = e.target.result;
-            state.questionPool[difficulty].push({
+        // Upload to Firebase Storage
+        const storageRef = storage.ref(`${state.sessionId}/questions/${difficulty}/${Date.now()}_${file.name}`);
+        
+        try {
+            const snapshot = await storageRef.put(file);
+            const downloadURL = await snapshot.ref.getDownloadURL();
+            
+            const questionData = {
                 id: Date.now() + Math.random(),
-                data: imageData,
+                url: downloadURL,
                 filename: file.name
-            });
+            };
+            
+            state.questionPool[difficulty].push(questionData);
+            
+            // Save to Firebase Database
+            await dbRef.questions.child(difficulty).set(state.questionPool[difficulty]);
+            
             updateQuestionPreview(difficulty);
-        };
-        reader.readAsDataURL(file);
+        } catch (error) {
+            console.error('Upload error:', error);
+            alert('Gagal upload gambar: ' + error.message);
+        }
     }
     
     event.target.value = '';
 }
 
+function loadQuestionsFromFirebase() {
+    dbRef.questions.once('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            state.questionPool = data;
+            ['easy', 'medium', 'hard'].forEach(diff => {
+                updateQuestionPreview(diff);
+            });
+        }
+    });
+}
+
 function updateQuestionPreview(difficulty) {
-    const count = state.questionPool[difficulty].length;
+    const count = state.questionPool[difficulty]?.length || 0;
     document.getElementById(`count-${difficulty}`).textContent = count;
     
     const previewArea = document.getElementById(`preview-${difficulty}`);
-    previewArea.innerHTML = state.questionPool[difficulty].map((q, index) => `
+    if (!previewArea) return;
+    
+    const questions = state.questionPool[difficulty] || [];
+    previewArea.innerHTML = questions.map((q, index) => `
         <div class="relative">
-            <img src="${q.data}" class="w-full h-24 object-cover rounded border-2 border-gray-300">
+            <img src="${q.url}" class="w-full h-24 object-cover rounded border-2 border-gray-300">
             <button onclick="removeQuestion('${difficulty}', ${index})" 
                     class="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600">
                 ×
@@ -189,8 +299,9 @@ function updateQuestionPreview(difficulty) {
     `).join('');
 }
 
-function removeQuestion(difficulty, index) {
+async function removeQuestion(difficulty, index) {
     state.questionPool[difficulty].splice(index, 1);
+    await dbRef.questions.child(difficulty).set(state.questionPool[difficulty]);
     updateQuestionPreview(difficulty);
 }
 
@@ -212,7 +323,7 @@ function updateParticipantList() {
     }
 }
 
-function registerParticipant() {
+async function registerParticipant() {
     const nameInput = document.getElementById('participantName');
     const name = nameInput.value.trim();
     
@@ -226,13 +337,18 @@ function registerParticipant() {
         return;
     }
     
-    const id = Date.now() + Math.random();
+    const id = 'participant_' + Date.now();
     state.participantId = id;
     state.participantName = name;
-    state.participants.push({ id, name, answers: {} });
+    
+    // Save to Firebase
+    await dbRef.participants.child(id).set({
+        name: name,
+        joinedAt: Date.now(),
+        answers: {}
+    });
     
     nameInput.value = '';
-    updateParticipantList();
     
     document.getElementById('registrationForm').classList.add('hidden');
     document.getElementById('waitingScreen').classList.remove('hidden');
@@ -242,44 +358,44 @@ function registerParticipant() {
 // ========================================
 // COMPETITION MANAGEMENT
 // ========================================
-function startCompetition() {
+async function startCompetition() {
     if (state.participants.length === 0) {
         alert('Tambahkan peserta terlebih dahulu!');
         return;
     }
     
     // Check if all difficulties have 6 questions
-    if (state.questionPool.easy.length < 6) {
+    if (!state.questionPool.easy || state.questionPool.easy.length < 6) {
         alert('Upload 6 soal Mudah terlebih dahulu!');
         return;
     }
-    if (state.questionPool.medium.length < 6) {
+    if (!state.questionPool.medium || state.questionPool.medium.length < 6) {
         alert('Upload 6 soal Sedang terlebih dahulu!');
         return;
     }
-    if (state.questionPool.hard.length < 6) {
+    if (!state.questionPool.hard || state.questionPool.hard.length < 6) {
         alert('Upload 6 soal Sulit terlebih dahulu!');
         return;
     }
-    
-    // Initialize used questions tracking for each participant
-    state.participants.forEach(p => {
-        state.usedQuestions[p.id] = { easy: [], medium: [], hard: [] };
-    });
     
     state.isCompetitionActive = true;
     state.phase = 'selection';
     state.currentSet = 1;
     state.timeLeft = 30;
     
+    // Save to Firebase
+    await dbRef.competition.set({
+        isActive: true,
+        phase: 'selection',
+        currentSet: 1,
+        timeLeft: 30,
+        startedAt: Date.now()
+    });
+    
     document.getElementById('startBtn').disabled = true;
     document.getElementById('startBtn').textContent = 'Kompetisi Sedang Berjalan';
     document.getElementById('competitionStatus').classList.remove('hidden');
     document.getElementById('currentSetAdmin').textContent = state.currentSet;
-    
-    if (state.participantId) {
-        showCompetitionScreen();
-    }
     
     startTimer();
 }
@@ -289,12 +405,16 @@ function startTimer() {
         clearInterval(state.timerInterval);
     }
     
-    state.timerInterval = setInterval(() => {
+    if (!state.isAdmin) return; // Only admin controls timer
+    
+    state.timerInterval = setInterval(async () => {
         state.timeLeft--;
-        updateTimerDisplay();
+        
+        // Update Firebase
+        await dbRef.competition.update({ timeLeft: state.timeLeft });
         
         if (state.timeLeft <= 0) {
-            handleTimeUp();
+            await handleTimeUp();
         }
     }, 1000);
 }
@@ -306,42 +426,70 @@ function updateTimerDisplay() {
     }
 }
 
-function handleTimeUp() {
+async function handleTimeUp() {
     if (state.phase === 'selection') {
-        if (!state.selectedDifficulty) {
-            state.selectedDifficulty = 'easy';
-        }
-        startWorkingPhase();
+        state.phase = 'working';
+        state.timeLeft = 600;
+        
+        await dbRef.competition.update({
+            phase: 'working',
+            timeLeft: 600
+        });
+        
+        // Participants will handle their own working phase
     } else if (state.phase === 'working') {
-        finishWorkingPhase();
+        if (state.currentSet < 6) {
+            state.currentSet++;
+            state.phase = 'selection';
+            state.timeLeft = 30;
+            
+            await dbRef.competition.update({
+                phase: 'selection',
+                currentSet: state.currentSet,
+                timeLeft: 30
+            });
+            
+            document.getElementById('currentSetAdmin').textContent = state.currentSet;
+        } else {
+            await finishCompetition();
+        }
     }
 }
 
 // ========================================
-// COMPETITION PHASES
+// COMPETITION PHASES (PARTICIPANT)
 // ========================================
 function showCompetitionScreen() {
     document.getElementById('waitingScreen').classList.add('hidden');
     document.getElementById('competitionScreen').classList.remove('hidden');
-    showSelectionPhase();
+    
+    // Listen for phase changes
+    dbRef.competition.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data && data.isActive) {
+            state.currentSet = data.currentSet;
+            state.phase = data.phase;
+            state.timeLeft = data.timeLeft;
+            
+            if (data.phase === 'selection') {
+                showSelectionPhase();
+            } else if (data.phase === 'working' && state.selectedDifficulty) {
+                startWorkingPhase();
+            }
+        }
+    });
 }
 
 function showSelectionPhase() {
-    state.phase = 'selection';
-    state.timeLeft = 30;
-    state.selectedDifficulty = null;
-    
     document.getElementById('selectionPhase').classList.remove('hidden');
     document.getElementById('workingPhase').classList.add('hidden');
     document.getElementById('currentSetNum').textContent = state.currentSet;
     
-    // Show available question counts (6 for all since we always have 6 questions)
     document.getElementById('easyCount').textContent = '6';
     document.getElementById('mediumCount').textContent = '6';
     document.getElementById('hardCount').textContent = '6';
     
     resetDifficultyButtons();
-    startTimer();
 }
 
 function selectDifficulty(difficulty) {
@@ -351,7 +499,10 @@ function selectDifficulty(difficulty) {
 
 function resetDifficultyButtons() {
     ['btnEasy', 'btnMedium', 'btnHard'].forEach(id => {
-        document.getElementById(id).className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+        }
     });
 }
 
@@ -360,89 +511,74 @@ function updateDifficultyButtons(selected) {
     
     Object.entries(buttons).forEach(([diff, id]) => {
         const btn = document.getElementById(id);
-        if (diff === selected) {
-            btn.className = 'p-6 rounded-lg border-4 border-green-500 bg-green-50 scale-105 transition-all';
-        } else {
-            btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+        if (btn) {
+            if (diff === selected) {
+                btn.className = 'p-6 rounded-lg border-4 border-green-500 bg-green-50 scale-105 transition-all';
+            } else {
+                btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+            }
         }
     });
 }
 
-function startWorkingPhase() {
-    const difficulty = state.selectedDifficulty;
-    const questionPool = state.questionPool[difficulty];
-    const usedQuestions = state.usedQuestions[state.participantId][difficulty];
+async function startWorkingPhase() {
+    if (!state.selectedDifficulty) {
+        state.selectedDifficulty = 'easy';
+    }
     
-    // Get available questions (not used by this participant yet)
+    const difficulty = state.selectedDifficulty;
+    
+    // Get question pool from Firebase
+    const snapshot = await dbRef.questions.child(difficulty).once('value');
+    const questionPool = snapshot.val() || [];
+    
+    if (questionPool.length === 0) {
+        alert('Tidak ada soal tersedia!');
+        return;
+    }
+    
+    // Initialize used questions tracking
+    if (!state.usedQuestions[state.participantId]) {
+        state.usedQuestions[state.participantId] = { easy: [], medium: [], hard: [] };
+    }
+    
+    const usedQuestions = state.usedQuestions[state.participantId][difficulty];
     const availableQuestions = questionPool.filter(q => !usedQuestions.includes(q.id));
     
     if (availableQuestions.length === 0) {
-        alert('Tidak ada soal tersedia lagi untuk kesulitan ini!');
-        // Auto select another difficulty
-        if (state.questionPool.easy.length > 0 && state.usedQuestions[state.participantId].easy.length < 6) {
-            state.selectedDifficulty = 'easy';
-        } else if (state.questionPool.medium.length > 0 && state.usedQuestions[state.participantId].medium.length < 6) {
-            state.selectedDifficulty = 'medium';
-        } else if (state.questionPool.hard.length > 0 && state.usedQuestions[state.participantId].hard.length < 6) {
-            state.selectedDifficulty = 'hard';
-        } else {
-            finishWorkingPhase();
-            return;
-        }
-        return startWorkingPhase();
+        alert('Semua soal sudah dikerjakan!');
+        return;
     }
     
-    // Randomize and select one question
+    // Random select
     const shuffled = shuffleArray(availableQuestions, state.participantId + state.currentSet);
     const selectedQuestion = shuffled[0];
     
-    // Mark this question as used
+    // Mark as used
     state.usedQuestions[state.participantId][difficulty].push(selectedQuestion.id);
     state.currentQuestion = selectedQuestion;
-    state.phase = 'working';
-    state.timeLeft = 600;
     
     document.getElementById('selectionPhase').classList.add('hidden');
     document.getElementById('workingPhase').classList.remove('hidden');
     
     const diffLabels = { easy: 'Mudah', medium: 'Sedang', hard: 'Sulit' };
-    document.getElementById('selectedDifficultyLabel').textContent = diffLabels[state.selectedDifficulty];
+    document.getElementById('selectedDifficultyLabel').textContent = diffLabels[difficulty];
     
-    // Display image question
     const questionText = document.getElementById('questionText');
-    questionText.innerHTML = `<img src="${selectedQuestion.data}" class="max-w-full h-auto rounded-lg border-2 border-gray-300">`;
+    questionText.innerHTML = `<img src="${selectedQuestion.url}" class="max-w-full h-auto rounded-lg border-2 border-gray-300" alt="Soal">`;
     
     const savedAnswer = state.answers[`set${state.currentSet}`] || '';
     document.getElementById('answerInput').value = savedAnswer;
-    
-    startTimer();
 }
 
-function finishWorkingPhase() {
-    const answer = document.getElementById('answerInput').value;
-    state.answers[`set${state.currentSet}`] = answer;
-    
-    const participantIndex = state.participants.findIndex(p => p.id === state.participantId);
-    if (participantIndex !== -1) {
-        state.participants[participantIndex].answers[`set${state.currentSet}`] = {
-            difficulty: state.selectedDifficulty,
-            question: state.currentQuestion,
-            answer: answer
-        };
-    }
-    
-    if (state.currentSet < 6) {
-        state.currentSet++;
-        document.getElementById('currentSetAdmin').textContent = state.currentSet;
-        showSelectionPhase();
-    } else {
-        finishCompetition();
-    }
-}
-
-function finishCompetition() {
+async function finishCompetition() {
     state.phase = 'finished';
     clearInterval(state.timerInterval);
+    
+    await dbRef.competition.update({
+        isActive: false,
+        phase: 'finished'
+    });
     
     document.getElementById('competitionScreen').classList.add('hidden');
     document.getElementById('finishedScreen').classList.remove('hidden');
@@ -452,23 +588,19 @@ function finishCompetition() {
 // KEYBOARD SHORTCUT
 // ========================================
 function setupKeyboardShortcut() {
-    // Option+Shift+G (Mac) or Alt+Shift+G (Windows/Linux)
     document.addEventListener('keydown', (e) => {
-        // Check for Option/Alt + Shift + G
         if ((e.altKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
             e.preventDefault();
             showAdminLogin();
         }
     });
     
-    // Enter key on password input
     document.getElementById('adminPassword').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             loginAdmin();
         }
     });
     
-    // Enter key on participant name
     document.getElementById('participantName').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             registerParticipant();
@@ -480,15 +612,24 @@ function setupKeyboardShortcut() {
 // INITIALIZATION
 // ========================================
 document.addEventListener('DOMContentLoaded', () => {
+    initFirebase();
     initQuestionInput();
     switchToParticipant();
-    updateParticipantList();
     setupKeyboardShortcut();
     
     const answerInput = document.getElementById('answerInput');
     if (answerInput) {
-        answerInput.addEventListener('input', (e) => {
+        answerInput.addEventListener('input', async (e) => {
             state.answers[`set${state.currentSet}`] = e.target.value;
+            
+            // Save answer to Firebase
+            if (state.participantId) {
+                await dbRef.participants.child(state.participantId).child('answers').child(`set${state.currentSet}`).set({
+                    difficulty: state.selectedDifficulty,
+                    answer: e.target.value,
+                    timestamp: Date.now()
+                });
+            }
         });
     }
 });
