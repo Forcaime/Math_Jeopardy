@@ -3,33 +3,34 @@
 // ========================================
 const state = {
     adminPassword: 'pradita789',
+    sessionToken: 'OS2J8U', // Fixed token
     questionPool: {
         easy: [
-            { id: "A1", src: "questions/A1.png", alt: "A1" },
-            { id: "B1", src: "questions/B1.png", alt: "B1" },
-            { id: "C1", src: "questions/C1.png", alt: "C1" },
-            { id: "D1", src: "questions/D1.png", alt: "D1" },
-            { id: "E1", src: "questions/E1.png", alt: "E1" },
-            { id: "F1", src: "questions/F1.png", alt: "F1" }
+            { id: 'A1', filename: 'A1.png', url: 'questions/A1.png' },
+            { id: 'B1', filename: 'B1.png', url: 'questions/B1.png' },
+            { id: 'C1', filename: 'C1.png', url: 'questions/C1.png' },
+            { id: 'D1', filename: 'D1.png', url: 'questions/D1.png' },
+            { id: 'E1', filename: 'E1.png', url: 'questions/E1.png' },
+            { id: 'F1', filename: 'F1.png', url: 'questions/F1.png' }
         ],
         medium: [
-            { id: "A2", src: "questions/A2.png", alt: "A2" },
-            { id: "B2", src: "questions/B2.png", alt: "B2" },
-            { id: "C2", src: "questions/C2.png", alt: "C2" },
-            { id: "D2", src: "questions/D2.png", alt: "D2" },
-            { id: "E2", src: "questions/E2.png", alt: "E2" },
-            { id: "F2", src: "questions/F2.png", alt: "F2" }
+            { id: 'A2', filename: 'A2.png', url: 'questions/A2.png' },
+            { id: 'B2', filename: 'B2.png', url: 'questions/B2.png' },
+            { id: 'C2', filename: 'C2.png', url: 'questions/C2.png' },
+            { id: 'D2', filename: 'D2.png', url: 'questions/D2.png' },
+            { id: 'E2', filename: 'E2.png', url: 'questions/E2.png' },
+            { id: 'F2', filename: 'F2.png', url: 'questions/F2.png' }
         ],
         hard: [
-            { id: "A3", src: "questions/A3.png", alt: "A3" },
-            { id: "B3", src: "questions/B3.png", alt: "B3" },
-            { id: "C3", src: "questions/C3.png", alt: "C3" },
-            { id: "D3", src: "questions/D3.png", alt: "D3" },
-            { id: "E3", src: "questions/E3.png", alt: "E3" },
-            { id: "F3", src: "questions/F3.png", alt: "F3" }
-        ],
+            { id: 'A3', filename: 'A3.png', url: 'questions/A3.png' },
+            { id: 'B3', filename: 'B3.png', url: 'questions/B3.png' },
+            { id: 'C3', filename: 'C3.png', url: 'questions/C3.png' },
+            { id: 'D3', filename: 'D3.png', url: 'questions/D3.png' },
+            { id: 'E3', filename: 'E3.png', url: 'questions/E3.png' },
+            { id: 'F3', filename: 'F3.png', url: 'questions/F3.png' }
+        ]
     },
-    usedQuestions: {}, // Track soal yang sudah digunakan per peserta
+    usedQuestions: {},
     participants: [],
     currentSet: 1,
     phase: 'setup',
@@ -37,16 +38,26 @@ const state = {
     selectedDifficulty: null,
     participantId: null,
     participantName: '',
+    participantToken: '',
     answers: {},
     currentQuestion: null,
     isCompetitionActive: false,
     timerInterval: null,
-    competitionToken: null // New state for token
+    isAdmin: false
 };
 
 // ========================================
 // UTILITY FUNCTIONS
 // ========================================
+function generateToken() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let token = '';
+    for (let i = 0; i < 6; i++) {
+        token += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return token;
+}
+
 function shuffleArray(array, seed) {
     const arr = [...array];
     let currentIndex = arr.length;
@@ -68,13 +79,90 @@ function formatTime(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function generateToken() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let token = '';
-    for (let i = 0; i < 6; i++) {
-        token += chars.charAt(Math.floor(Math.random() * chars.length));
+function hashString(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
     }
-    return token;
+    return Math.abs(hash);
+}
+
+// ========================================
+// LOCAL STORAGE SYNC
+// ========================================
+function saveToStorage(key, data) {
+    localStorage.setItem(`olympiad_${state.sessionToken}_${key}`, JSON.stringify(data));
+    broadcastUpdate(key, data);
+}
+
+function loadFromStorage(key) {
+    const data = localStorage.getItem(`olympiad_${state.sessionToken}_${key}`);
+    return data ? JSON.parse(data) : null;
+}
+
+function broadcastUpdate(key, data) {
+    localStorage.setItem(`olympiad_${state.sessionToken}_update`, JSON.stringify({
+        key: key,
+        data: data,
+        timestamp: Date.now()
+    }));
+}
+
+function listenForUpdates() {
+    window.addEventListener('storage', (e) => {
+        if (e.key === `olympiad_${state.sessionToken}_update` && !state.isAdmin) {
+            const update = JSON.parse(e.newValue);
+            handleUpdate(update.key, update.data);
+        }
+    });
+    
+    // Poll for updates (fallback for same-tab updates)
+    setInterval(() => {
+        if (!state.isAdmin) {
+            checkForUpdates();
+        }
+    }, 500);
+}
+
+function checkForUpdates() {
+    const competition = loadFromStorage('competition');
+    if (competition && competition.isActive) {
+        if (!state.isCompetitionActive) {
+            state.isCompetitionActive = true;
+            showCompetitionScreen();
+        }
+        
+        state.currentSet = competition.currentSet;
+        state.phase = competition.phase;
+        state.timeLeft = competition.timeLeft;
+        updateTimerDisplay();
+        
+        if (competition.phase === 'selection' && !document.getElementById('selectionPhase').classList.contains('hidden')) {
+            // Already in selection
+        } else if (competition.phase === 'selection' && document.getElementById('selectionPhase').classList.contains('hidden')) {
+            showSelectionPhase();
+        } else if (competition.phase === 'working' && state.selectedDifficulty && document.getElementById('workingPhase').classList.contains('hidden')) {
+            startWorkingPhase();
+        } else if (competition.phase === 'finished') {
+            finishCompetition();
+        }
+    }
+    
+    // Update participant list
+    const participants = loadFromStorage('participants') || [];
+    state.participants = participants;
+    updateParticipantList();
+}
+
+function handleUpdate(key, data) {
+    if (key === 'competition') {
+        checkForUpdates();
+    } else if (key === 'participants') {
+        state.participants = data;
+        updateParticipantList();
+    }
 }
 
 // ========================================
@@ -91,12 +179,19 @@ function showAdminLogin() {
 }
 
 function switchToAdmin() {
+    state.isAdmin = true;
     document.getElementById('adminLogin').classList.add('hidden');
     document.getElementById('participantView').classList.add('hidden');
     document.getElementById('adminView').classList.remove('hidden');
+    
+    // Load existing data
+    const participants = loadFromStorage('participants') || [];
+    state.participants = participants;
+    updateParticipantList();
 }
 
 function switchToParticipant() {
+    state.isAdmin = false;
     document.getElementById('adminLogin').classList.add('hidden');
     document.getElementById('adminView').classList.add('hidden');
     document.getElementById('participantView').classList.remove('hidden');
@@ -120,102 +215,8 @@ function loginAdmin() {
 }
 
 function logoutAdmin() {
-    state.competitionToken = null; // Clear token on logout
+    state.isAdmin = false;
     showAdminLogin();
-}
-
-// ========================================
-// QUESTION MANAGEMENT
-// ========================================
-function initQuestionInput() {
-    const area = document.getElementById('questionInputArea');
-    let html = '';
-    
-    const difficulties = [
-        { key: 'easy', label: 'Mudah', color: 'green' },
-        { key: 'medium', label: 'Sedang', color: 'yellow' },
-        { key: 'hard', label: 'Sulit', color: 'red' }
-    ];
-    
-    difficulties.forEach(diff => {
-        html += `
-            <div class="mb-6 p-4 bg-gray-50 rounded-lg border-2 border-${diff.color}-200">
-                <h3 class="font-semibold mb-3 text-lg text-${diff.color}-700">${diff.label} (<span id="count-${diff.key}">0</span>/6 soal)</h3>
-                <div class="grid grid-cols-3 gap-3 mb-3" id="preview-${diff.key}"></div>
-                <input type="file" 
-                       id="input-${diff.key}" 
-                       accept="image/jpeg,image/jpg,image/png"
-                       multiple
-                       class="hidden"
-                       onchange="handleImageUpload(event, '${diff.key}')">
-                <button onclick="document.getElementById('input-${diff.key}').click()" 
-                        class="w-full py-2 px-4 bg-${diff.color}-500 text-white rounded-lg hover:bg-${diff.key === 'easy' ? 'green' : diff.key === 'medium' ? 'yellow' : 'red'}-600 transition">
-                    + Upload Gambar Soal
-                </button>
-            </div>
-        `;
-    });
-    
-    area.innerHTML = html;
-}
-
-function handleImageUpload(event, difficulty) {
-    const files = event.target.files;
-    const currentCount = state.questionPool[difficulty].length;
-    
-    if (currentCount >= 6) {
-        alert('Maksimal 6 soal untuk setiap tingkat kesulitan!');
-        event.target.value = '';
-        return;
-    }
-    
-    const remaining = 6 - currentCount;
-    const filesToProcess = Math.min(files.length, remaining);
-    
-    for (let i = 0; i < filesToProcess; i++) {
-        const file = files[i];
-        
-        if (!file.type.match('image/(jpeg|jpg|png)')) {
-            alert('Format file harus JPG, JPEG, atau PNG!');
-            continue;
-        }
-        
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const imageData = e.target.result;
-            state.questionPool[difficulty].push({
-                id: Date.now() + Math.random(),
-                data: imageData,
-                filename: file.name
-            });
-            updateQuestionPreview(difficulty);
-        };
-        reader.readAsDataURL(file);
-    }
-    
-    event.target.value = '';
-}
-
-function updateQuestionPreview(difficulty) {
-    const count = state.questionPool[difficulty].length;
-    document.getElementById(`count-${difficulty}`).textContent = count;
-    
-    const previewArea = document.getElementById(`preview-${difficulty}`);
-    previewArea.innerHTML = state.questionPool[difficulty].map((q, index) => `
-        <div class="relative">
-            <img src="${q.data}" class="w-full h-24 object-cover rounded border-2 border-gray-300">
-            <button onclick="removeQuestion('${difficulty}', ${index})" 
-                    class="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600">
-                ×
-            </button>
-            <p class="text-xs text-gray-600 mt-1 truncate">${index + 1}. ${q.filename}</p>
-        </div>
-    `).join('');
-}
-
-function removeQuestion(difficulty, index) {
-    state.questionPool[difficulty].splice(index, 1);
-    updateQuestionPreview(difficulty);
 }
 
 // ========================================
@@ -224,6 +225,8 @@ function removeQuestion(difficulty, index) {
 function updateParticipantList() {
     const list = document.getElementById('participantList');
     const count = document.getElementById('participantCount');
+    
+    if (!list || !count) return;
     
     count.textContent = state.participants.length;
     
@@ -236,49 +239,61 @@ function updateParticipantList() {
     }
 }
 
-function registerParticipant() {
+function joinCompetition() {
+    const tokenInput = document.getElementById('tokenInput');
     const nameInput = document.getElementById('participantName');
+    const token = tokenInput.value.trim().toUpperCase();
     const name = nameInput.value.trim();
     
-    if (!name) {
-        alert('Masukkan nama peserta!');
+    if (!token) {
+        alert('Masukkan token!');
         return;
     }
     
-    if (state.participants.length >= 15) {
+    if (!name) {
+        alert('Masukkan nama!');
+        return;
+    }
+    
+    if (token !== state.sessionToken) {
+        alert('Token salah!');
+        return;
+    }
+    
+    const participants = loadFromStorage('participants') || [];
+    
+    if (participants.length >= 15) {
         alert('Maksimal 15 peserta!');
         return;
     }
     
-    const id = Date.now() + Math.random();
+    const id = 'participant_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     state.participantId = id;
     state.participantName = name;
-    state.participants.push({ id, name, answers: {} });
+    state.participantToken = token;
+    state.usedQuestions[id] = { easy: [], medium: [], hard: [] };
     
+    participants.push({
+        id: id,
+        name: name,
+        joinedAt: Date.now(),
+        answers: {}
+    });
+    
+    saveToStorage('participants', participants);
+    state.participants = participants;
+    
+    tokenInput.value = '';
     nameInput.value = '';
-    updateParticipantList();
     
-    document.getElementById('registrationForm').classList.add('hidden');
+    document.getElementById('tokenForm').classList.add('hidden');
     document.getElementById('waitingScreen').classList.remove('hidden');
     document.getElementById('registeredName').textContent = name;
-}
-
-function startCompetitionByToken() {
-    const tokenInput = document.getElementById('competitionToken');
-    const tokenError = document.getElementById('tokenError');
-    const token = tokenInput.value.trim().toUpperCase();
-
-    tokenError.classList.add('hidden');
+    document.getElementById('usedToken').textContent = token;
     
-    if (!state.isCompetitionActive || state.competitionToken !== token) {
-        tokenError.classList.remove('hidden');
-        tokenInput.value = '';
-        tokenInput.focus();
-        return;
-    }
-
-    // Token is correct and competition is active, start for participant
-    showCompetitionScreen();
+    // Start listening for updates
+    listenForUpdates();
+    checkForUpdates();
 }
 
 // ========================================
@@ -290,43 +305,26 @@ function startCompetition() {
         return;
     }
     
-    // Check if all difficulties have 6 questions
-    if (state.questionPool.easy.length < 6) {
-        alert('Upload 6 soal Mudah terlebih dahulu!');
-        return;
-    }
-    if (state.questionPool.medium.length < 6) {
-        alert('Upload 6 soal Sedang terlebih dahulu!');
-        return;
-    }
-    if (state.questionPool.hard.length < 6) {
-        alert('Upload 6 soal Sulit terlebih dahulu!');
-        return;
-    }
-    
-    // Initialize used questions tracking for each participant
-    state.participants.forEach(p => {
-        state.usedQuestions[p.id] = { easy: [], medium: [], hard: [] };
-    });
-    
     state.isCompetitionActive = true;
-    state.competitionToken = generateToken(); // Generate token
     state.phase = 'selection';
     state.currentSet = 1;
     state.timeLeft = 30;
+    
+    saveToStorage('competition', {
+        isActive: true,
+        phase: 'selection',
+        currentSet: 1,
+        timeLeft: 30,
+        startedAt: Date.now()
+    });
     
     document.getElementById('startBtn').disabled = true;
     document.getElementById('startBtn').textContent = 'Kompetisi Sedang Berjalan';
     document.getElementById('competitionStatus').classList.remove('hidden');
     document.getElementById('currentSetAdmin').textContent = state.currentSet;
-    document.getElementById('competitionTokenAdmin').textContent = state.competitionToken; // Display token
+    document.getElementById('currentPhaseAdmin').textContent = state.phase;
     
-    // Do not auto-start for participant from admin view, they need the token
-    // if (state.participantId) {
-    //     showCompetitionScreen();
-    // }
-    
-    // startTimer(); // Timer starts in showSelectionPhase
+    startTimer();
 }
 
 function startTimer() {
@@ -334,15 +332,22 @@ function startTimer() {
         clearInterval(state.timerInterval);
     }
     
-    updateTimerDisplay(); // Initial display
+    if (!state.isAdmin) return;
+    
     state.timerInterval = setInterval(() => {
         state.timeLeft--;
-        if (state.timeLeft < 0) {
-            state.timeLeft = 0; // Prevent negative time
-        }
+        
+        saveToStorage('competition', {
+            isActive: true,
+            phase: state.phase,
+            currentSet: state.currentSet,
+            timeLeft: state.timeLeft
+        });
+        
         updateTimerDisplay();
-        if (state.timeLeft === 0) {
-            clearInterval(state.timerInterval); // Stop the timer
+        document.getElementById('timerAdmin').textContent = formatTime(state.timeLeft);
+        
+        if (state.timeLeft <= 0) {
             handleTimeUp();
         }
     }, 1000);
@@ -357,17 +362,54 @@ function updateTimerDisplay() {
 
 function handleTimeUp() {
     if (state.phase === 'selection') {
-        if (!state.selectedDifficulty) {
-            state.selectedDifficulty = 'easy';
-        }
-        startWorkingPhase();
+        state.phase = 'working';
+        state.timeLeft = 600;
+        
+        saveToStorage('competition', {
+            isActive: true,
+            phase: 'working',
+            currentSet: state.currentSet,
+            timeLeft: 600
+        });
+        
+        document.getElementById('currentPhaseAdmin').textContent = 'working';
     } else if (state.phase === 'working') {
-        finishWorkingPhase();
+        if (state.currentSet < 6) {
+            state.currentSet++;
+            state.phase = 'selection';
+            state.timeLeft = 30;
+            
+            saveToStorage('competition', {
+                isActive: true,
+                phase: 'selection',
+                currentSet: state.currentSet,
+                timeLeft: 30
+            });
+            
+            document.getElementById('currentSetAdmin').textContent = state.currentSet;
+            document.getElementById('currentPhaseAdmin').textContent = 'selection';
+        } else {
+            finishCompetitionAdmin();
+        }
     }
 }
 
+function finishCompetitionAdmin() {
+    state.phase = 'finished';
+    clearInterval(state.timerInterval);
+    
+    saveToStorage('competition', {
+        isActive: false,
+        phase: 'finished',
+        currentSet: 6,
+        timeLeft: 0
+    });
+    
+    alert('Kompetisi selesai!');
+}
+
 // ========================================
-// COMPETITION PHASES
+// COMPETITION PHASES (PARTICIPANT)
 // ========================================
 function showCompetitionScreen() {
     document.getElementById('waitingScreen').classList.add('hidden');
@@ -376,21 +418,17 @@ function showCompetitionScreen() {
 }
 
 function showSelectionPhase() {
-    state.phase = 'selection';
-    state.timeLeft = 30;
     state.selectedDifficulty = null;
     
     document.getElementById('selectionPhase').classList.remove('hidden');
     document.getElementById('workingPhase').classList.add('hidden');
     document.getElementById('currentSetNum').textContent = state.currentSet;
     
-    // Show available question counts (6 for all since we always have 6 questions)
     document.getElementById('easyCount').textContent = '6';
     document.getElementById('mediumCount').textContent = '6';
     document.getElementById('hardCount').textContent = '6';
     
     resetDifficultyButtons();
-    startTimer();
 }
 
 function selectDifficulty(difficulty) {
@@ -400,7 +438,10 @@ function selectDifficulty(difficulty) {
 
 function resetDifficultyButtons() {
     ['btnEasy', 'btnMedium', 'btnHard'].forEach(id => {
-        document.getElementById(id).className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+        }
     });
 }
 
@@ -409,47 +450,39 @@ function updateDifficultyButtons(selected) {
     
     Object.entries(buttons).forEach(([diff, id]) => {
         const btn = document.getElementById(id);
-        if (diff === selected) {
-            btn.className = 'p-6 rounded-lg border-4 border-green-500 bg-green-50 scale-105 transition-all';
-        } else {
-            btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+        if (btn) {
+            if (diff === selected) {
+                btn.className = 'p-6 rounded-lg border-4 border-green-500 bg-green-50 scale-105 transition-all';
+            } else {
+                btn.className = 'p-6 rounded-lg border-4 border-gray-200 hover:border-gray-300 transition-all';
+            }
         }
     });
 }
 
 function startWorkingPhase() {
+    if (!state.selectedDifficulty) {
+        state.selectedDifficulty = 'easy';
+    }
+    
     const difficulty = state.selectedDifficulty;
     const questionPool = state.questionPool[difficulty];
-    const usedQuestions = state.usedQuestions[state.participantId][difficulty];
     
-    // Get available questions (not used by this participant yet)
+    if (!state.usedQuestions[state.participantId]) {
+        state.usedQuestions[state.participantId] = { easy: [], medium: [], hard: [] };
+    }
+    
+    const usedQuestions = state.usedQuestions[state.participantId][difficulty];
     const availableQuestions = questionPool.filter(q => !usedQuestions.includes(q.id));
     
     if (availableQuestions.length === 0) {
-        alert('Tidak ada soal tersedia lagi untuk kesulitan ini!');
-        // Auto select another difficulty
-        if (state.questionPool.easy.length > 0 && state.usedQuestions[state.participantId].easy.length < 6) {
-            state.selectedDifficulty = 'easy';
-        } else if (state.questionPool.medium.length > 0 && state.usedQuestions[state.participantId].medium.length < 6) {
-            state.selectedDifficulty = 'medium';
-        } else if (state.questionPool.hard.length > 0 && state.usedQuestions[state.participantId].hard.length < 6) {
-            state.selectedDifficulty = 'hard';
-        } else {
-            finishWorkingPhase();
-            return;
-        }
-        return startWorkingPhase();
+        alert('Semua soal sudah dikerjakan!');
+        return;
     }
     
-    // Random select
-    // Note: The original code had a bug here, assuming a hashCode method on a number.
-    // I'm keeping the original logic structure but removing the non-standard hashCode call.
-    // Since participantId is a number (Date.now() + Math.random()), I'll use a simpler seed.
-    const seed = Math.floor(state.participantId) + state.currentSet;
-    const shuffled = shuffleArray(availableQuestions, seed);
+    const shuffled = shuffleArray(availableQuestions, hashString(state.participantId) + state.currentSet);
     const selectedQuestion = shuffled[0];
     
-    // Mark as used
     state.usedQuestions[state.participantId][difficulty].push(selectedQuestion.id);
     state.currentQuestion = selectedQuestion;
     
@@ -460,41 +493,14 @@ function startWorkingPhase() {
     document.getElementById('selectedDifficultyLabel').textContent = diffLabels[difficulty];
     
     const questionText = document.getElementById('questionText');
-    // FIX: Use selectedQuestion.src instead of selectedQuestion.url
-    questionText.innerHTML = `<img src="${selectedQuestion.src}" class="max-w-full h-auto rounded-lg border-2 border-gray-300" alt="Soal ${selectedQuestion.id}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22><rect fill=%22%23ddd%22 width=%22400%22 height=%22300%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22>${selectedQuestion.id}</text></svg>'">`;
+    questionText.innerHTML = `<img src="${selectedQuestion.url}" class="max-w-full h-auto rounded-lg border-2 border-gray-300" alt="Soal ${selectedQuestion.filename}" onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22%3E%3Crect fill=%22%23ddd%22 width=%22400%22 height=%22300%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2220%22%3E${selectedQuestion.filename}%3C/text%3E%3C/svg%3E';">`;
     
     const savedAnswer = state.answers[`set${state.currentSet}`] || '';
     document.getElementById('answerInput').value = savedAnswer;
-    
-    startTimer();
-}
-
-function finishWorkingPhase() {
-    const answer = document.getElementById('answerInput').value;
-    state.answers[`set${state.currentSet}`] = answer;
-    
-    const participantIndex = state.participants.findIndex(p => p.id === state.participantId);
-    if (participantIndex !== -1) {
-        state.participants[participantIndex].answers[`set${state.currentSet}`] = {
-            difficulty: state.selectedDifficulty,
-            question: state.currentQuestion,
-            answer: answer
-        };
-    }
-    
-    if (state.currentSet < 6) {
-        state.currentSet++;
-        document.getElementById('currentSetAdmin').textContent = state.currentSet;
-        showSelectionPhase();
-    } else {
-        finishCompetition();
-    }
 }
 
 function finishCompetition() {
     state.phase = 'finished';
-    clearInterval(state.timerInterval);
-    state.competitionToken = null; // Clear token on competition end
     
     document.getElementById('competitionScreen').classList.add('hidden');
     document.getElementById('finishedScreen').classList.remove('hidden');
@@ -504,36 +510,23 @@ function finishCompetition() {
 // KEYBOARD SHORTCUT
 // ========================================
 function setupKeyboardShortcut() {
-    // Option+Shift+G (Mac) or Alt+Shift+G (Windows/Linux)
     document.addEventListener('keydown', (e) => {
-        // Check for Option/Alt + Shift + G
         if ((e.altKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
             e.preventDefault();
             showAdminLogin();
         }
     });
     
-    // Enter key on password input
     document.getElementById('adminPassword').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             loginAdmin();
         }
     });
     
-    // Enter key on participant name
-    document.getElementById('participantName').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            registerParticipant();
-        }
-    });
-
-    // Enter key on token input
-    const tokenInput = document.getElementById('competitionToken');
+    const tokenInput = document.getElementById('tokenInput');
     if (tokenInput) {
-        tokenInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                startCompetitionByToken();
-            }
+        tokenInput.addEventListener('input', (e) => {
+            e.target.value = e.target.value.toUpperCase();
         });
     }
 }
@@ -542,15 +535,31 @@ function setupKeyboardShortcut() {
 // INITIALIZATION
 // ========================================
 document.addEventListener('DOMContentLoaded', () => {
-    initQuestionInput();
     switchToParticipant();
-    updateParticipantList();
     setupKeyboardShortcut();
     
     const answerInput = document.getElementById('answerInput');
     if (answerInput) {
         answerInput.addEventListener('input', (e) => {
             state.answers[`set${state.currentSet}`] = e.target.value;
+            
+            // Save answer to participant data
+            if (state.participantId) {
+                const participants = loadFromStorage('participants') || [];
+                const pIndex = participants.findIndex(p => p.id === state.participantId);
+                if (pIndex !== -1) {
+                    if (!participants[pIndex].answers) {
+                        participants[pIndex].answers = {};
+                    }
+                    participants[pIndex].answers[`set${state.currentSet}`] = {
+                        difficulty: state.selectedDifficulty,
+                        answer: e.target.value,
+                        questionId: state.currentQuestion?.id,
+                        timestamp: Date.now()
+                    };
+                    saveToStorage('participants', participants);
+                }
+            }
         });
     }
 });
